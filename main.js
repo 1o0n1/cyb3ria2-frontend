@@ -172,34 +172,56 @@ function selectChatPartner(userElement) {
     };
     document.getElementById('current-chat-user').innerText = currentChatPartner.username;
     document.getElementById('message-list').innerHTML = ''; // Очищаем чат
-    log(`Selected chat with ${currentChatPartner.username}.`);
+    log(`Selected chat with ${currentChatPartner.username}. You can now send a message.`);
     // TODO: Загрузить историю сообщений
 }
 
 async function handleSendMessage() {
     const messageText = document.getElementById('message-input').value;
-    if (!messageText) return;
+    if (!messageText.trim()) return;
     if (!currentChatPartner) return log("Error: No chat partner selected.");
 
-    log("Encrypting message...");
+    log("Encrypting message with WASM...");
     const myPrivateKey = localStorage.getItem('userPrivateKey');
     const theirPublicKey = currentChatPartner.publicKey;
+    const token = localStorage.getItem('jwtToken');
+
+    if (!myPrivateKey) return log("CRITICAL ERROR: Private key is missing. Cannot send message.");
 
     try {
-        // Вызываем WASM для шифрования
-        const encryptedMessage = encrypt(myPrivateKey, theirPublicKey, messageText);
-        log("Message encrypted. Sending to server...");
+        // 1. Вызываем WASM для шифрования
+        const encryptedMessageB64 = encrypt(myPrivateKey, theirPublicKey, messageText);
+        log("Message encrypted successfully.");
 
-        const token = localStorage.getItem('jwtToken');
-        // TODO: Отправить на бэкенд
-        // const response = await fetch(`${API_URL}/messages`, ...);
+        // 2. Отправляем зашифрованное сообщение на бэкенд
+        const response = await fetch(`${API_URL}/messages`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                recipient_id: currentChatPartner.id,
+                content: encryptedMessageB64
+            })
+        });
+
+        if (!response.ok) throw new Error((await response.json()).error || 'Failed to send message');
+
+        const sentMessage = await response.json();
+        log(`Message sent successfully. ID: ${sentMessage.id}`);
         
         document.getElementById('message-input').value = ''; // Очищаем поле ввода
-        log("Message sent (simulation).");
-        // TODO: Обновить UI с новым сообщением
+        
+        // Отображаем наше собственное сообщение сразу
+        const messageList = document.getElementById('message-list');
+        const msgDiv = document.createElement('div');
+        msgDiv.innerHTML = `<b>You:</b> ${messageText}`;
+        messageList.appendChild(msgDiv);
+        messageList.scrollTop = messageList.scrollHeight;
 
     } catch (e) {
-        log(`Encryption failed: ${e}`);
+        log(`Error: ${e}`);
     }
 }
 
