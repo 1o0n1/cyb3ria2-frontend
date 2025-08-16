@@ -171,9 +171,12 @@ function selectChatPartner(userElement) {
         username: userElement.dataset.username,
     };
     document.getElementById('current-chat-user').innerText = currentChatPartner.username;
-    document.getElementById('message-list').innerHTML = ''; // Очищаем чат
-    log(`Selected chat with ${currentChatPartner.username}. You can now send a message.`);
-    // TODO: Загрузить историю сообщений
+    const messageList = document.getElementById('message-list');
+    messageList.innerHTML = '<em>Loading conversation...</em>'; // Показываем загрузку
+    log(`Selected chat with ${currentChatPartner.username}.`);
+    
+    // ДОБАВЛЯЕМ ВЫЗОВ НОВОЙ ФУНКЦИИ
+    loadConversation(currentChatPartner);
 }
 
 async function handleSendMessage() {
@@ -222,6 +225,67 @@ async function handleSendMessage() {
 
     } catch (e) {
         log(`Error: ${e}`);
+    }
+}
+
+function displayMessage(text, isMine) {
+    const messageList = document.getElementById('message-list');
+    const msgDiv = document.createElement('div');
+    
+    const prefix = isMine ? 'You:' : `${currentChatPartner.username}:`;
+    // Важно: экранируем HTML, чтобы избежать XSS атак
+    const safeText = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    msgDiv.innerHTML = `<b>${prefix}</b> ${safeText}`;
+    
+    if (isMine) {
+        msgDiv.style.textAlign = 'right';
+    }
+
+    messageList.appendChild(msgDiv);
+    messageList.scrollTop = messageList.scrollHeight;
+}
+
+// --- ДОБАВЛЯЕМ НОВУЮ ФУНКЦИЮ ---
+async function loadConversation(partner) {
+    log(`Loading messages with ${partner.username}...`);
+    const token = localStorage.getItem('jwtToken');
+    const myPrivateKey = localStorage.getItem('userPrivateKey');
+
+    // Ключ собеседника мы берем из `partner` объекта
+    const theirPublicKey = partner.publicKey;
+
+    try {
+        const response = await fetch(`${API_URL}/messages/${partner.id}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error("Failed to load conversation");
+
+        const encryptedMessages = await response.json();
+        const messageList = document.getElementById('message-list');
+        messageList.innerHTML = ''; // Очищаем "Loading..."
+
+        if (encryptedMessages.length === 0) {
+            messageList.innerHTML = '<em>No messages yet.</em>';
+            return;
+        }
+
+        const myId = JSON.parse(atob(token.split('.')[1])).sub;
+
+        for (const msg of encryptedMessages) {
+            try {
+                // Пытаемся расшифровать сообщение
+                const decryptedText = decrypt(myPrivateKey, theirPublicKey, msg.content);
+                // Если успешно, отображаем
+                displayMessage(decryptedText, msg.user_id === myId);
+            } catch (e) {
+                // Если ошибка (например, сообщение было зашифровано другим ключом)
+                displayMessage("<em>[Could not decrypt this message]</em>", msg.user_id === myId);
+            }
+        }
+        log("Conversation loaded.");
+
+    } catch (error) {
+        log(`Error: ${error.message}`);
     }
 }
 
