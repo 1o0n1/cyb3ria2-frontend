@@ -23,11 +23,28 @@
         <button id="register-btn">Register</button>
         <button id="login-btn">Login</button>
     </div>
+    
+    <!-- ... код до #chat-view ... -->
 
-    <!-- Область чата (пока скрыта) -->
-    <div id="chat-view" style="display: none;">
-       <!-- ... -->
+   <div id="chat-view" style="display: none;">
+    <h2>Your Secure Channel</h2>
+    <div style="display: flex;">
+        <!-- Левая колонка со списком пользователей -->
+        <div id="user-list" style="width: 30%; border-right: 1px solid #00ff00; padding-right: 10px;">
+            <h3>Contacts</h3>
+            <!-- Список будет здесь -->
+        </div>
+        <!-- Правая колонка с чатом -->
+        <div id="message-area" style="width: 70%; padding-left: 10px;">
+            <h3>Messages with <span id="current-chat-user">...</span></h3>
+            <div id="message-list" style="height: 200px; overflow-y: scroll; border: 1px solid #555; padding: 5px;">
+                <!-- Сообщения будут здесь -->
+            </div>
+            <textarea id="message-input" placeholder="Type an encrypted message..." style="width: 95%; margin-top: 10px;"></textarea>
+            <button id="send-btn">Send Secure</button>
+        </div>
     </div>
+</div>
 
     <div id="log"></div>
 

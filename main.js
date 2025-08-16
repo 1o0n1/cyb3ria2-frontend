@@ -124,15 +124,15 @@ function showChatView() {
     document.getElementById('chat-view').style.display = 'block';
     log("Switched to chat view.");
     
-    // TODO: Здесь будет логика загрузки пользователей и сообщений
+    loadUsers(); 
 }
 
 function checkAuthState() {
     const token = localStorage.getItem('jwtToken');
     const publicKey = localStorage.getItem('userPublicKey');
-    const privateKey = localStorage.getItem('userPrivateKey'); // Проверим и его, он нужен для отправки
+    // const privateKey = localStorage.getItem('userPrivateKey'); // Проверим и его, он нужен для отправки
 
-    if (token && publicKey && privateKey) {
+    if (token && publicKey) {
         log("Active session found. User is logged in.");
         showChatView();
     } else {
@@ -151,6 +151,53 @@ function log(message) {
     const logDiv = document.getElementById('log');
     logDiv.innerHTML += `> ${message}<br>`;
     logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+async function loadUsers() {
+    log("Loading user list...");
+    const token = localStorage.getItem('jwtToken');
+    if (!token) {
+        log("Error: Not authenticated.");
+        return;
+    }
+
+    try {
+        const response = await fetch(`${API_URL}/users`, {
+            method: 'GET',
+            headers: {
+                // ВАЖНО: Отправляем наш JWT токен для аутентификации
+                'Authorization': `Bearer ${token}`
+            }
+        });
+
+        if (!response.ok) throw new Error("Failed to fetch users");
+
+        const users = await response.json();
+        const userListDiv = document.getElementById('user-list');
+        userListDiv.innerHTML = '<h3>Contacts</h3>'; // Очищаем старый список
+
+        users.forEach(user => {
+            // Пропускаем отображение самого себя в списке
+            const payload = JSON.parse(atob(token.split('.')[1]));
+            if (user.id === payload.sub) {
+                return;
+            }
+            
+            const userElement = document.createElement('div');
+            userElement.innerText = user.username;
+            userElement.style.cursor = 'pointer';
+            // Сохраняем данные пользователя прямо в элементе для будущего использования
+            userElement.dataset.userId = user.id;
+            userElement.dataset.publicKey = user.public_key;
+            
+            // TODO: Добавить обработчик клика для начала чата
+            userListDiv.appendChild(userElement);
+        });
+        log("User list loaded.");
+
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
 }
 
 // ================================================================================
