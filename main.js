@@ -164,7 +164,6 @@ async function loadUsers() {
     }
 }
 
-// --- ОБНОВЛЕННАЯ ФУНКЦИЯ ---
 function selectChatPartner(userElement) {
     currentChatPartner = {
         id: userElement.dataset.userId,
@@ -172,12 +171,9 @@ function selectChatPartner(userElement) {
         username: userElement.dataset.username,
     };
     document.getElementById('current-chat-user').innerText = currentChatPartner.username;
-    const messageList = document.getElementById('message-list');
-    messageList.innerHTML = '<em>Loading conversation...</em>'; // Показываем загрузку
-    log(`Selected chat with ${currentChatPartner.username}.`);
-    
-    // СРАЗУ ЗАГРУЖАЕМ ИСТОРИЮ ПЕРЕПИСКИ
-    loadConversation(currentChatPartner);
+    document.getElementById('message-list').innerHTML = ''; // Очищаем чат
+    log(`Selected chat with ${currentChatPartner.username}. You can now send a message.`);
+    // TODO: Загрузить историю сообщений
 }
 
 async function handleSendMessage() {
@@ -229,60 +225,13 @@ async function handleSendMessage() {
     }
 }
 
-// --- НОВАЯ ФУНКЦИЯ ---
-async function loadConversation(partner) {
-    const token = localStorage.getItem('jwtToken');
-    const myPrivateKey = localStorage.getItem('userPrivateKey');
-    const theirPublicKey = partner.publicKey;
-
-    try {
-        const response = await fetch(`${API_URL}/messages/${partner.id}`, {
-            headers: { 'Authorization': `Bearer ${token}` }
-        });
-        if (!response.ok) throw new Error("Failed to load conversation");
-
-        const encryptedMessages = await response.json();
-        const messageList = document.getElementById('message-list');
-        messageList.innerHTML = ''; // Очищаем "Loading..."
-
-        if (encryptedMessages.length === 0) {
-            messageList.innerHTML = '<em>No messages yet.</em>';
-            return;
-        }
-
-        const myId = JSON.parse(atob(token.split('.')[1])).sub;
-
-        for (const msg of encryptedMessages) {
-            try {
-                // Расшифровываем сообщение с помощью WASM
-                const decryptedText = decrypt(myPrivateKey, theirPublicKey, msg.content);
-                // Отображаем
-                displayMessage(decryptedText, msg.user_id === myId);
-            } catch (e) {
-                displayMessage("<em>[Could not decrypt this message]</em>", msg.user_id === myId);
-            }
-        }
-    } catch (error) {
-        log(`Error: ${error.message}`);
-    }
-}
-
-// --- НОВАЯ ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ ---
-function displayMessage(text, isMine) {
-    const messageList = document.getElementById('message-list');
-    const msgDiv = document.createElement('div');
-    
-    // Добавляем префикс, чтобы было понятно, кто автор
-    const prefix = isMine ? 'You:' : `${currentChatPartner.username}:`;
-    msgDiv.innerHTML = `<b>${prefix}</b> ${text}`;
-    
-    // Выравниваем свои сообщения справа
-    if (isMine) {
-        msgDiv.style.textAlign = 'right';
-    }
-
-    messageList.appendChild(msgDiv);
-    messageList.scrollTop = messageList.scrollHeight; // Авто-прокрутка вниз
+// =================================================================================
+// ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ
+// =================================================================================
+function log(message) {
+    const logDiv = document.getElementById('log');
+    logDiv.innerHTML += `> ${message}<br>`;
+    logDiv.scrollTop = logDiv.scrollHeight;
 }
 
 main();
