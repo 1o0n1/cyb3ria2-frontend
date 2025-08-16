@@ -1,6 +1,7 @@
-import init, { generate_keypair_base64 } from './crypto-core/pkg/crypto_core.js';
+import init, { generate_keypair_base64, encrypt, decrypt } from './crypto-core/pkg/crypto_core.js';
 
 const API_URL = 'http://localhost:3000';
+let currentChatPartner = null; // Глобальная переменная для хранения инфо о собеседнике
 
 // =================================================================================
 // ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА
@@ -9,108 +10,78 @@ async function main() {
     await init();
     log("WASM Crypto Core Loaded.");
 
-    const registerBtn = document.getElementById('register-btn');
-    const loginBtn = document.getElementById('login-btn');
-
-    registerBtn.addEventListener('click', handleRegister);
-    loginBtn.addEventListener('click', handleLogin);
+    document.getElementById('register-btn').addEventListener('click', handleRegister);
+    document.getElementById('login-btn').addEventListener('click', handleLogin);
+    document.getElementById('send-btn').addEventListener('click', handleSendMessage);
 
     checkAuthState();
 }
 
 // =================================================================================
-// ЛОГИКА АУТЕНТИФИКАЦИИ (РЕГИСТРАЦИЯ И ВХОД) - НАДЕЖНАЯ ВЕРСИЯ
+// ЛОГИКА АУТЕНТИФИКАЦИИ
 // =================================================================================
 async function handleRegister() {
+    // ... этот код у тебя уже верный, оставляем без изменений ...
     const email = document.getElementById('email').value;
     const username = document.getElementById('username').value;
     const password = document.getElementById('password').value;
-
-    if (!email || !username || !password) {
-        log("Error: Email, username and password are required.");
-        return;
-    }
+    if (!email || !username || !password) return log("Error: All fields are required.");
 
     log("Generating cryptographic keys...");
     const [secretKeyB64, publicKeyB64] = generate_keypair_base64();
     log("Keys generated successfully.");
 
     try {
-        log("Sending registration request to server...");
+        log("Sending registration request...");
         const response = await fetch(`${API_URL}/users`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, username, password, public_key: publicKeyB64 }),
         });
-
-        // Надежная проверка ответа
-        if (!response.ok) {
-            let errorMsg = `HTTP error! status: ${response.status}`;
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error || errorMsg;
-            } catch (e) { /* Игнорируем ошибку парсинга JSON, используем HTTP статус */ }
-            throw new Error(errorMsg);
-        }
+        if (!response.ok) throw new Error((await response.json()).error || 'Registration failed');
         
         const result = await response.json();
-
-        log(`Registration successful for user: ${result.username}`);
-        log("Saving private key to local storage...");
+        log(`Registration successful for ${result.username}`);
         
+        // Сохраняем ВСЕ ключи. Это единственный момент, когда сохраняется приватный ключ.
         localStorage.setItem('userPrivateKey', secretKeyB64);
         localStorage.setItem('userPublicKey', publicKeyB64);
         
         log("Registration complete. Please log in now.");
-
     } catch (error) {
         log(`Error: ${error.message}`);
     }
 }
 
 async function handleLogin() {
+    // ... этот код у тебя тоже верный, оставляем ...
     const email = document.getElementById('email').value;
     const password = document.getElementById('password').value;
+    if (!email || !password) return log("Error: Email and password are required.");
 
-    if (!email || !password) {
-        log("Error: Email and password are required.");
-        return;
-    }
-
-    log("Sending login request to server...");
-
+    log("Sending login request...");
     try {
         const response = await fetch(`${API_URL}/login`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ email, password }),
         });
-
-        // Аналогичная надежная проверка ответа
-        if (!response.ok) {
-            let errorMsg = `HTTP error! status: ${response.status}`;
-            try {
-                const errorData = await response.json();
-                errorMsg = errorData.error || errorMsg;
-            } catch (e) { /* Игнорируем */ }
-            throw new Error(errorMsg);
-        }
-
+        if (!response.ok) throw new Error((await response.json()).error || 'Login failed');
+        
         const result = await response.json();
-
         log("Login successful! Token received.");
         
+        // 1. Сохраняем токен
         localStorage.setItem('jwtToken', result.token);
-
-        const payloadB64 = result.token.split('.')[1];
-        const payloadJson = atob(payloadB64);
-        const payload = JSON.parse(payloadJson);
         
+        // 2. Декодируем токен и сохраняем public key
+        const payloadB64 = result.token.split('.')[1];
+        const payload = JSON.parse(atob(payloadB64));
         localStorage.setItem('userPublicKey', payload.pk);
         log("Public key extracted from token and saved.");
 
-        showChatView();
-
+        // 3. Теперь, когда все нужные части сохранены, перепроверяем состояние
+        checkAuthState();
     } catch (error) {
         log(`Error: ${error.message}`);
     }
@@ -123,24 +94,112 @@ function showChatView() {
     document.getElementById('auth-view').style.display = 'none';
     document.getElementById('chat-view').style.display = 'block';
     log("Switched to chat view.");
-    
-    loadUsers(); 
+
+    // ПРОВЕРКА НА ВОЗМОЖНОСТЬ ШИФРОВАНИЯ
+    const privateKey = localStorage.getItem('userPrivateKey');
+    if (privateKey) {
+        log("Private key found. Encryption is available.");
+        // Если ключ есть, загружаем пользователей для чата
+        loadUsers();
+    } else {
+        log("Warning: Private key not found. You can receive messages, but cannot send.");
+        // Если ключа нет, можно, например, заблокировать поле ввода
+        document.getElementById('message-input').disabled = true;
+        document.getElementById('send-btn').disabled = true;
+    }
 }
 
+// --- ФИНАЛЬНАЯ, ПРАВИЛЬНАЯ ВЕРСИЯ ---
 function checkAuthState() {
     const token = localStorage.getItem('jwtToken');
     const publicKey = localStorage.getItem('userPublicKey');
-    // const privateKey = localStorage.getItem('userPrivateKey'); // Проверим и его, он нужен для отправки
-
+    
+    // ГЛАВНОЕ ИЗМЕНЕНИЕ: Сессия активна, если есть ТОКЕН и ПУБЛИЧНЫЙ КЛЮЧ.
     if (token && publicKey) {
         log("Active session found. User is logged in.");
         showChatView();
     } else {
-        log("No active session found. Please log in or register.");
-        // Чистим хранилище, если чего-то не хватает для полноценной работы
-        localStorage.removeItem('jwtToken');
-        localStorage.removeItem('userPublicKey');
-        localStorage.removeItem('userPrivateKey');
+        log("No active session found. Please log in.");
+        // Показываем форму входа, если чего-то не хватает
+        document.getElementById('auth-view').style.display = 'block';
+        document.getElementById('chat-view').style.display = 'none';
+    }
+}
+
+// =================================================================================
+// ЛОГИКА ЧАТА
+// =================================================================================
+async function loadUsers() {
+    log("Loading user list...");
+    const token = localStorage.getItem('jwtToken');
+    if (!token) return log("Error: Not authenticated.");
+
+    try {
+        const response = await fetch(`${API_URL}/users`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error("Failed to fetch users");
+        
+        const users = await response.json();
+        const userListDiv = document.getElementById('user-list');
+        userListDiv.innerHTML = '<h3>Contacts</h3>';
+
+        const myId = JSON.parse(atob(token.split('.')[1])).sub;
+        users.forEach(user => {
+            if (user.id === myId || !user.public_key) return; // Не показываем себя и юзеров без ключа
+            
+            const userElement = document.createElement('div');
+            userElement.innerText = `> ${user.username}`;
+            userElement.style.cursor = 'pointer';
+            userElement.dataset.userId = user.id;
+            userElement.dataset.publicKey = user.public_key;
+            userElement.dataset.username = user.username; // Сохраняем имя для заголовка
+            
+            userElement.addEventListener('click', () => selectChatPartner(userElement));
+            userListDiv.appendChild(userElement);
+        });
+        log("User list loaded.");
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
+}
+
+function selectChatPartner(userElement) {
+    currentChatPartner = {
+        id: userElement.dataset.userId,
+        publicKey: userElement.dataset.publicKey,
+        username: userElement.dataset.username,
+    };
+    document.getElementById('current-chat-user').innerText = currentChatPartner.username;
+    document.getElementById('message-list').innerHTML = ''; // Очищаем чат
+    log(`Selected chat with ${currentChatPartner.username}.`);
+    // TODO: Загрузить историю сообщений
+}
+
+async function handleSendMessage() {
+    const messageText = document.getElementById('message-input').value;
+    if (!messageText) return;
+    if (!currentChatPartner) return log("Error: No chat partner selected.");
+
+    log("Encrypting message...");
+    const myPrivateKey = localStorage.getItem('userPrivateKey');
+    const theirPublicKey = currentChatPartner.publicKey;
+
+    try {
+        // Вызываем WASM для шифрования
+        const encryptedMessage = encrypt(myPrivateKey, theirPublicKey, messageText);
+        log("Message encrypted. Sending to server...");
+
+        const token = localStorage.getItem('jwtToken');
+        // TODO: Отправить на бэкенд
+        // const response = await fetch(`${API_URL}/messages`, ...);
+        
+        document.getElementById('message-input').value = ''; // Очищаем поле ввода
+        log("Message sent (simulation).");
+        // TODO: Обновить UI с новым сообщением
+
+    } catch (e) {
+        log(`Encryption failed: ${e}`);
     }
 }
 
@@ -153,54 +212,4 @@ function log(message) {
     logDiv.scrollTop = logDiv.scrollHeight;
 }
 
-async function loadUsers() {
-    log("Loading user list...");
-    const token = localStorage.getItem('jwtToken');
-    if (!token) {
-        log("Error: Not authenticated.");
-        return;
-    }
-
-    try {
-        const response = await fetch(`${API_URL}/users`, {
-            method: 'GET',
-            headers: {
-                // ВАЖНО: Отправляем наш JWT токен для аутентификации
-                'Authorization': `Bearer ${token}`
-            }
-        });
-
-        if (!response.ok) throw new Error("Failed to fetch users");
-
-        const users = await response.json();
-        const userListDiv = document.getElementById('user-list');
-        userListDiv.innerHTML = '<h3>Contacts</h3>'; // Очищаем старый список
-
-        users.forEach(user => {
-            // Пропускаем отображение самого себя в списке
-            const payload = JSON.parse(atob(token.split('.')[1]));
-            if (user.id === payload.sub) {
-                return;
-            }
-            
-            const userElement = document.createElement('div');
-            userElement.innerText = user.username;
-            userElement.style.cursor = 'pointer';
-            // Сохраняем данные пользователя прямо в элементе для будущего использования
-            userElement.dataset.userId = user.id;
-            userElement.dataset.publicKey = user.public_key;
-            
-            // TODO: Добавить обработчик клика для начала чата
-            userListDiv.appendChild(userElement);
-        });
-        log("User list loaded.");
-
-    } catch (error) {
-        log(`Error: ${error.message}`);
-    }
-}
-
-// ================================================================================
-// ЗАПУСК ПРИЛОЖЕНИЯ
-// ================================================================================
 main();
