@@ -1,0 +1,485 @@
+/var/www/cyb3ria-frontend/main.js
+
+import init, { generate_keypair_base64, encrypt, decrypt } from './crypto-core/pkg/crypto_core.js';
+
+const API_URL = 'http://localhost:3000';
+let currentChatPartner = null; // Глобальная переменная для хранения инфо о собеседнике
+
+// =================================================================================
+// ОСНОВНАЯ ФУНКЦИЯ ЗАПУСКА
+// =================================================================================
+async function main() {
+    await init();
+    log("WASM Crypto Core Loaded.");
+
+    document.getElementById('register-btn').addEventListener('click', handleRegister);
+    document.getElementById('login-btn').addEventListener('click', handleLogin);
+    document.getElementById('send-btn').addEventListener('click', handleSendMessage);
+
+    checkAuthState();
+}
+
+// =================================================================================
+// ЛОГИКА АУТЕНТИФИКАЦИИ
+// =================================================================================
+async function handleRegister() {
+    // ... этот код у тебя уже верный, оставляем без изменений ...
+    const email = document.getElementById('email').value;
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+    if (!email || !username || !password) return log("Error: All fields are required.");
+
+    log("Generating cryptographic keys...");
+    const [secretKeyB64, publicKeyB64] = generate_keypair_base64();
+    log("Keys generated successfully.");
+
+    try {
+        log("Sending registration request...");
+        const response = await fetch(`${API_URL}/users`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, username, password, public_key: publicKeyB64 }),
+        });
+        if (!response.ok) throw new Error((await response.json()).error || 'Registration failed');
+        
+        const result = await response.json();
+        log(`Registration successful for ${result.username}`);
+        
+        // Сохраняем ВСЕ ключи. Это единственный момент, когда сохраняется приватный ключ.
+        localStorage.setItem('userPrivateKey', secretKeyB64);
+        localStorage.setItem('userPublicKey', publicKeyB64);
+        
+        log("Registration complete. Please log in now.");
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
+}
+
+async function handleLogin() {
+    // ... этот код у тебя тоже верный, оставляем ...
+    const email = document.getElementById('email').value;
+    const password = document.getElementById('password').value;
+    if (!email || !password) return log("Error: Email and password are required.");
+
+    log("Sending login request...");
+    try {
+        const response = await fetch(`${API_URL}/login`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ email, password }),
+        });
+        if (!response.ok) throw new Error((await response.json()).error || 'Login failed');
+        
+        const result = await response.json();
+        log("Login successful! Token received.");
+        
+        // 1. Сохраняем токен
+        localStorage.setItem('jwtToken', result.token);
+        
+        // 2. Декодируем токен и сохраняем public key
+        const payloadB64 = result.token.split('.')[1];
+        const payload = JSON.parse(atob(payloadB64));
+        localStorage.setItem('userPublicKey', payload.pk);
+        log("Public key extracted from token and saved.");
+
+        // 3. Теперь, когда все нужные части сохранены, перепроверяем состояние
+        checkAuthState();
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
+}
+
+// =================================================================================
+// УПРАВЛЕНИЕ ИНТЕРФЕЙСОМ И СОСТОЯНИЕМ
+// =================================================================================
+function showChatView() {
+    document.getElementById('auth-view').style.display = 'none';
+    document.getElementById('chat-view').style.display = 'block';
+    log("Switched to chat view.");
+
+    // ПРОВЕРКА НА ВОЗМОЖНОСТЬ ШИФРОВАНИЯ
+    const privateKey = localStorage.getItem('userPrivateKey');
+    if (privateKey) {
+        log("Private key found. Encryption is available.");
+        // Если ключ есть, загружаем пользователей для чата
+        loadUsers();
+    } else {
+        log("Warning: Private key not found. You can receive messages, but cannot send.");
+        // Если ключа нет, можно, например, заблокировать поле ввода
+        document.getElementById('message-input').disabled = true;
+        document.getElementById('send-btn').disabled = true;
+    }
+}
+
+// --- ФИНАЛЬНАЯ, ПРАВИЛЬНАЯ ВЕРСИЯ ---
+function checkAuthState() {
+    const token = localStorage.getItem('jwtToken');
+    const publicKey = localStorage.getItem('userPublicKey');
+    
+    // ГЛАВНОЕ ИЗМЕНЕНИЕ: Сессия активна, если есть ТОКЕН и ПУБЛИЧНЫЙ КЛЮЧ.
+    if (token && publicKey) {
+        log("Active session found. User is logged in.");
+        showChatView();
+    } else {
+        log("No active session found. Please log in.");
+        // Показываем форму входа, если чего-то не хватает
+        document.getElementById('auth-view').style.display = 'block';
+        document.getElementById('chat-view').style.display = 'none';
+    }
+}
+
+// =================================================================================
+// ЛОГИКА ЧАТА
+// =================================================================================
+async function loadUsers() {
+    log("Loading user list...");
+    const token = localStorage.getItem('jwtToken');
+    if (!token) return log("Error: Not authenticated.");
+
+    try {
+        const response = await fetch(`${API_URL}/users`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error("Failed to fetch users");
+        
+        const users = await response.json();
+        const userListDiv = document.getElementById('user-list');
+        userListDiv.innerHTML = '<h3>Contacts</h3>';
+
+        const myId = JSON.parse(atob(token.split('.')[1])).sub;
+        users.forEach(user => {
+            if (user.id === myId || !user.public_key) return; // Не показываем себя и юзеров без ключа
+            
+            const userElement = document.createElement('div');
+            userElement.innerText = `> ${user.username}`;
+            userElement.style.cursor = 'pointer';
+            userElement.dataset.userId = user.id;
+            userElement.dataset.publicKey = user.public_key;
+            userElement.dataset.username = user.username; // Сохраняем имя для заголовка
+            
+            userElement.addEventListener('click', () => selectChatPartner(userElement));
+            userListDiv.appendChild(userElement);
+        });
+        log("User list loaded.");
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
+}
+
+function selectChatPartner(userElement) {
+    currentChatPartner = {
+        id: userElement.dataset.userId,
+        publicKey: userElement.dataset.publicKey,
+        username: userElement.dataset.username,
+    };
+    document.getElementById('current-chat-user').innerText = currentChatPartner.username;
+    const messageList = document.getElementById('message-list');
+    messageList.innerHTML = '<em>Loading conversation...</em>'; // Показываем загрузку
+    log(`Selected chat with ${currentChatPartner.username}.`);
+    
+    // ДОБАВЛЯЕМ ВЫЗОВ НОВОЙ ФУНКЦИИ
+    loadConversation(currentChatPartner);
+}
+
+async function handleSendMessage() {
+    const messageText = document.getElementById('message-input').value;
+    if (!messageText.trim()) return;
+    if (!currentChatPartner) return log("Error: No chat partner selected.");
+
+    log("Encrypting message with WASM...");
+    const myPrivateKey = localStorage.getItem('userPrivateKey');
+    const theirPublicKey = currentChatPartner.publicKey;
+    const token = localStorage.getItem('jwtToken');
+
+    if (!myPrivateKey) return log("CRITICAL ERROR: Private key is missing. Cannot send message.");
+
+    try {
+        // 1. Вызываем WASM для шифрования
+        const encryptedMessageB64 = encrypt(myPrivateKey, theirPublicKey, messageText);
+        log("Message encrypted successfully.");
+
+        // 2. Отправляем зашифрованное сообщение на бэкенд
+        const response = await fetch(`${API_URL}/messages`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${token}`
+            },
+            body: JSON.stringify({
+                recipient_id: currentChatPartner.id,
+                content: encryptedMessageB64
+            })
+        });
+
+        if (!response.ok) throw new Error((await response.json()).error || 'Failed to send message');
+
+        const sentMessage = await response.json();
+        log(`Message sent successfully. ID: ${sentMessage.id}`);
+        
+        document.getElementById('message-input').value = ''; // Очищаем поле ввода
+        
+        // Отображаем наше собственное сообщение сразу
+        const messageList = document.getElementById('message-list');
+        const msgDiv = document.createElement('div');
+        msgDiv.innerHTML = `<b>You:</b> ${messageText}`;
+        messageList.appendChild(msgDiv);
+        messageList.scrollTop = messageList.scrollHeight;
+
+    } catch (e) {
+        log(`Error: ${e}`);
+    }
+}
+
+function displayMessage(text, isMine) {
+    const messageList = document.getElementById('message-list');
+    const msgDiv = document.createElement('div');
+    
+    const prefix = isMine ? 'You:' : `${currentChatPartner.username}:`;
+    // Важно: экранируем HTML, чтобы избежать XSS атак
+    const safeText = text.replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    msgDiv.innerHTML = `<b>${prefix}</b> ${safeText}`;
+    
+    if (isMine) {
+        msgDiv.style.textAlign = 'right';
+    }
+
+    messageList.appendChild(msgDiv);
+    messageList.scrollTop = messageList.scrollHeight;
+}
+
+// --- ДОБАВЛЯЕМ НОВУЮ ФУНКЦИЮ ---
+async function loadConversation(partner) {
+    log(`Loading messages with ${partner.username}...`);
+    const token = localStorage.getItem('jwtToken');
+    const myPrivateKey = localStorage.getItem('userPrivateKey');
+
+    // Ключ собеседника мы берем из `partner` объекта
+    const theirPublicKey = partner.publicKey;
+
+    try {
+        const response = await fetch(`${API_URL}/messages/${partner.id}`, {
+            headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!response.ok) throw new Error("Failed to load conversation");
+
+        const encryptedMessages = await response.json();
+        const messageList = document.getElementById('message-list');
+        messageList.innerHTML = ''; // Очищаем "Loading..."
+
+        if (encryptedMessages.length === 0) {
+            messageList.innerHTML = '<em>No messages yet.</em>';
+            return;
+        }
+
+        const myId = JSON.parse(atob(token.split('.')[1])).sub;
+
+        for (const msg of encryptedMessages) {
+            try {
+                // Пытаемся расшифровать сообщение
+                const decryptedText = decrypt(myPrivateKey, theirPublicKey, msg.content);
+                // Если успешно, отображаем
+                displayMessage(decryptedText, msg.user_id === myId);
+            } catch (e) {
+                // Если ошибка (например, сообщение было зашифровано другим ключом)
+                displayMessage("<em>[Could not decrypt this message]</em>", msg.user_id === myId);
+            }
+        }
+        log("Conversation loaded.");
+
+    } catch (error) {
+        log(`Error: ${error.message}`);
+    }
+}
+
+// =================================================================================
+// ВСПОМОГАТЕЛЬНАЯ ФУНКЦИЯ
+// =================================================================================
+function log(message) {
+    const logDiv = document.getElementById('log');
+    logDiv.innerHTML += `> ${message}<br>`;
+    logDiv.scrollTop = logDiv.scrollHeight;
+}
+
+main();
+
+
+
+/var/www/cyb3ria-frontend/crypto-core/Cargo.toml
+
+[package]
+name = "crypto-core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wasm-bindgen = "0.2"
+
+# Библиотека для AES-GCM шифрования (быстрая и безопасная)
+aes-gcm = "0.10"
+
+# Библиотеки для криптографии на эллиптических кривых (для обмена ключами)
+p256 = { version = "0.13", features = ["ecdh"] }
+elliptic-curve = { version = "0.13", features = ["serde"] }
+
+# Для генерации случайных чисел (создание ключей)
+# ИЗМЕНЕНИЕ ЗДЕСЬ. Мы убираем rand_core и используем getrandom напрямую.
+# rand_core был транзитивной зависимостью, но нам нужно сконфигурировать getrandom.
+getrandom = { version = "0.2", features = ["js"] }
+
+# Для работы с base64 (удобно для передачи ключей)
+base64ct = { version = "1.6", features = ["alloc"] }
+
+
+
+/var/www/cyb3ria-frontend/crypto-core/src/lib.rs
+
+use wasm_bindgen::prelude::*;
+use p256::ecdh::diffie_hellman;
+use p256::{PublicKey, SecretKey};
+use aes_gcm::{
+    // ИСПРАВЛЕНИЕ #1: Добавляем трейт `AeadCore`, чтобы была доступна `generate_nonce`
+    aead::{Aead, AeadCore, KeyInit, OsRng},
+    Aes256Gcm, Nonce,
+};
+use base64ct::{Base64, Encoding};
+// ИСПРАВЛЕНИЕ #2: Импортируем `GenericArray` для преобразования типов
+use elliptic_curve::generic_array::GenericArray;
+
+// --- УПРАВЛЕНИЕ КЛЮЧАМИ ---
+
+#[wasm_bindgen]
+pub fn generate_keypair_base64() -> Vec<String> {
+    let secret_key = SecretKey::random(&mut OsRng);
+    let public_key = secret_key.public_key();
+
+    let secret_b64 = Base64::encode_string(secret_key.to_bytes().as_slice());
+    let public_b64 = Base64::encode_string(public_key.to_sec1_bytes().as_ref());
+
+    vec![secret_b64, public_b64]
+}
+
+// --- ШИФРОВАНИЕ И РАСШИФРОВКА ---
+
+#[wasm_bindgen]
+pub fn encrypt(my_secret_key_b64: &str, their_public_key_b64: &str, plaintext: &str) -> Result<String, JsValue> {
+    // 1. Декодируем ключи
+    let secret_bytes = Base64::decode_vec(my_secret_key_b64).map_err(|e| e.to_string())?;
+    // ИСПРАВЛЕНИЕ #3: Преобразуем Vec<u8> в GenericArray нужного типа
+    let secret_key = SecretKey::from_bytes(GenericArray::from_slice(&secret_bytes)).map_err(|e| e.to_string())?;
+    
+    let public_bytes = Base64::decode_vec(their_public_key_b64).map_err(|e| e.to_string())?;
+    let public_key = PublicKey::from_sec1_bytes(&public_bytes).map_err(|e| e.to_string())?;
+
+    // 2. Вычисляем общий секрет
+    let shared_secret = diffie_hellman(secret_key.to_nonzero_scalar(), public_key.as_affine());
+    
+    // ИСПРАВЛЕНИЕ #4: Явно копируем байты из GenericArray в обычный массив
+    let key = shared_secret.raw_secret_bytes();
+    let key_array: [u8; 32] = key.as_slice().try_into().expect("Incorrect key size");
+
+    // 3. Шифруем
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(&key_array));
+    let nonce = Aes256Gcm::generate_nonce(&mut OsRng); 
+    let ciphertext = cipher.encrypt(&nonce, plaintext.as_bytes()).map_err(|e| e.to_string())?;
+    
+    // 4. Объединяем и кодируем
+    let mut result = nonce.to_vec();
+    result.extend_from_slice(&ciphertext);
+    
+    Ok(Base64::encode_string(&result))
+}
+
+#[wasm_bindgen]
+pub fn decrypt(my_secret_key_b64: &str, their_public_key_b64: &str, ciphertext_b64: &str) -> Result<String, JsValue> {
+    // 1. Декодируем ключи
+    let secret_bytes = Base64::decode_vec(my_secret_key_b64).map_err(|e| e.to_string())?;
+    // ИСПРАВЛЕНИЕ #3 (повторяем)
+    let secret_key = SecretKey::from_bytes(GenericArray::from_slice(&secret_bytes)).map_err(|e| e.to_string())?;
+    
+    let public_bytes = Base64::decode_vec(their_public_key_b64).map_err(|e| e.to_string())?;
+    let public_key = PublicKey::from_sec1_bytes(&public_bytes).map_err(|e| e.to_string())?;
+
+    // 2. Вычисляем общий секрет
+    let shared_secret = diffie_hellman(secret_key.to_nonzero_scalar(), public_key.as_affine());
+    
+    // ИСПРАВЛЕНИЕ #4 (повторяем)
+    let key = shared_secret.raw_secret_bytes();
+    let key_array: [u8; 32] = key.as_slice().try_into().expect("Incorrect key size");
+    
+    // 3. Декодируем сообщение
+    let data = Base64::decode_vec(ciphertext_b64).map_err(|e| e.to_string())?;
+    if data.len() < 12 { return Err("Invalid ciphertext".into()); }
+    
+    let (nonce_bytes, ciphertext) = data.split_at(12);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    
+    // 4. Расшифровываем
+    let cipher = Aes256Gcm::new(GenericArray::from_slice(&key_array));
+    let plaintext_bytes = cipher.decrypt(nonce, ciphertext).map_err(|e| e.to_string())?;
+    
+    String::from_utf8(plaintext_bytes).map_err(|e| e.to_string().into())
+}
+
+
+
+/var/www/cyb3ria-frontend/index.html
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Cyb3ria Secure Messenger</title>
+    <style>
+        body { font-family: monospace; background: #0a0a0a; color: #00ff00; max-width: 600px; margin: 20px auto; }
+        input, button { background: #222; color: #00ff00; border: 1px solid #00ff00; padding: 8px; margin: 5px 0; }
+        button { cursor: pointer; }
+        #log { border: 1px dashed #555; padding: 10px; height: 100px; overflow-y: scroll; margin-top: 20px; }
+    </style>
+</head>
+<body>
+    <h1>Cyb3ria Secure Messenger</h1>
+
+    <!-- Область для входа/регистрации -->
+    <div id="auth-view">
+        <h2>Login / Register</h2>
+        <input type="email" id="email" placeholder="Email">
+        <input type="text" id="username" placeholder="Username (for registration)">
+        <input type="password" id="password" placeholder="Password">
+        <br>
+        <button id="register-btn">Register</button>
+        <button id="login-btn">Login</button>
+    </div>
+    
+    <!-- ... код до #chat-view ... -->
+
+   <div id="chat-view" style="display: none;">
+    <h2>Your Secure Channel</h2>
+    <div style="display: flex;">
+        <!-- Левая колонка со списком пользователей -->
+        <div id="user-list" style="width: 30%; border-right: 1px solid #00ff00; padding-right: 10px;">
+            <h3>Contacts</h3>
+            <!-- Список будет здесь -->
+        </div>
+        <!-- Правая колонка с чатом -->
+        <div id="message-area" style="width: 70%; padding-left: 10px;">
+            <h3>Messages with <span id="current-chat-user">...</span></h3>
+            <div id="message-list" style="height: 200px; overflow-y: scroll; border: 1px solid #555; padding: 5px;">
+                <!-- Сообщения будут здесь -->
+            </div>
+            <textarea id="message-input" placeholder="Type an encrypted message..." style="width: 95%; margin-top: 10px;"></textarea>
+            <button id="send-btn">Send Secure</button>
+        </div>
+    </div>
+</div>
+
+    <div id="log"></div>
+
+    <script src="main.js" type="module"></script>
+</body>
+</html>
+
+
+

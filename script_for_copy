@@ -1,0 +1,31 @@
+#!/bin/bash
+
+# Путь к папке бэкенда
+BACKEND_DIR="../cyb3ria"
+# Папка, куда будем копировать статику
+PUBLIC_DIR="$BACKEND_DIR/public"
+
+echo "Building WASM module..."
+# Переходим в папку crypto-core и собираем WASM
+(cd crypto-core && wasm-pack build --target web)
+
+# Проверяем, что сборка прошла успешно
+if [ $? -ne 0 ]; then
+    echo "WASM build failed. Aborting."
+    exit 1
+fi
+
+echo "Copying frontend files to $PUBLIC_DIR..."
+
+# Удаляем старую папку, если она есть
+rm -rf "$PUBLIC_DIR"
+# Создаем новую
+mkdir -p "$PUBLIC_DIR/pkg" # Создаем и вложенную папку
+
+# Копируем все необходимые файлы
+cp index.html "$PUBLIC_DIR/"
+cp main.js "$PUBLIC_DIR/"
+# Копируем всю папку с собранным WASM
+cp -r crypto-core/pkg/* "$PUBLIC_DIR/pkg/"
+
+echo "Done. Frontend is ready to be served by the backend."
