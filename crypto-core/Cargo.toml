@@ -8,18 +8,13 @@ crate-type = ["cdylib"]
 
 [dependencies]
 wasm-bindgen = "0.2"
-
-# Библиотека для AES-GCM шифрования (быстрая и безопасная)
 aes-gcm = "0.10"
-
-# Библиотеки для криптографии на эллиптических кривых (для обмена ключами)
 p256 = { version = "0.13", features = ["ecdh"] }
 elliptic-curve = { version = "0.13", features = ["serde"] }
-
-# Для генерации случайных чисел (создание ключей)
-# ИЗМЕНЕНИЕ ЗДЕСЬ. Мы убираем rand_core и используем getrandom напрямую.
-# rand_core был транзитивной зависимостью, но нам нужно сконфигурировать getrandom.
 getrandom = { version = "0.2", features = ["js"] }
-
-# Для работы с base64 (удобно для передачи ключей)
 base64ct = { version = "1.6", features = ["alloc"] }
+
+# ИСПРАВЛЕНИЕ ЗДЕСЬ: Добавляем features = ["simple"]
+pbkdf2 = { version = "0.12", features = ["simple"] }
+
+rand = { version = "0.8", features = ["getrandom"] }
