@@ -3,3 +3,4 @@
 
 # Сгенерированный WASM-пакет. Его лучше генерировать при сборке, а не хранить в git
 /crypto-core/pkg/
+/project_contents.txt
